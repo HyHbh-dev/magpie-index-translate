@@ -1,0 +1,38 @@
+{
+  "name": "magpie-index-translate",
+  "version": "1.0.0",
+  "description": "Magpie / OpenCode provider plugin for the Bilibili Index-Translate free public API",
+  "type": "module",
+  "main": "./index.mjs",
+  "files": [
+    "index.mjs",
+    "lib.mjs",
+    "selftest.mjs",
+    "README.md",
+    "examples/prompts.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "index-translate",
+    "translation",
+    "magpie"
+  ],
+  "license": "MIT",
+  "magpie": {
+    "name": "B站 Index-Translate",
+    "summary": {
+      "zh": "把 B 站 Index-Translate 翻译模型接进 magpie：官方免费 API 零配置可用，支持 150 种语言、图片翻译、术语约束、音节控制与长文档。",
+      "en": "Bilibili Index-Translate translation models for magpie, using the free OpenAI-compatible public API."
+    },
+    "icon": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300A1D6'/%3E%3Ctext x='32' y='42' font-size='28' font-family='Arial,sans-serif' font-weight='bold' text-anchor='middle' fill='white'%3EIT%3C/text%3E%3C/svg%3E",
+    "maxConcurrency": 2,
+    "options": {
+      "keepSystem": false,
+      "maxTokens": 4096,
+      "temperature": 0,
+      "stripThinking": true,
+      "timeoutMs": 120000
+    }
+  }
+}
