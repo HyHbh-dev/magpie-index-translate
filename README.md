@@ -15,6 +15,22 @@ magpie plugin add github:HyHbh-dev/magpie-index-translate
 
 ## 0. 版本修复记录
 
+### v2.0：把两个同类插件的优点合并
+
+对照公开实现 [`Kleistr/magpie-bilibili-translate`](https://github.com/Kleistr/magpie-bilibili-translate)（MIT）重新审了一遍：它的核心经验是**只在会 400 的地方动手，其余一概不碰**。v1.2 / v1.3 / v1.4 那三个 bug 全部来自本插件对 `messages` 的裁剪，v2.0 直接把这条路砍掉。
+
+| 改动 | 之前（v1.x） | 现在（v2.0） |
+| --- | --- | --- |
+| 消息处理 | 只留最后一条 `user`，system 按关键词与长度判定 | **原样透传**（system + 全部历史）；`trimHistory: true` 才回到旧行为 |
+| `Origin` 请求头 | 未处理 | 删除（浏览器形态的 Origin 会触发官方 WAF） |
+| 模型列表 | 静态表，需手动开 `dynamicModels` | 默认动态拉 `/v1/models`：5 分钟缓存 + 5 秒超时 + 静态表兜底 |
+| `provider.models` 返回形态 | 只有 `modalities` | 同时给 `capabilities` 与 `cost`，magpie 才能正确判断图片支持 |
+| 入口导出 | 命名导出函数 | `export default { id, server }`（官方推荐形态，辅助函数不会被误当插件） |
+
+保留下来的是对方没有的两件事：流式请求强制 `stream_options.include_usage`（否则 magpie 用量面板永远是 0/0）、以及免登录开箱可用 + `capturePath` 排障。v1.3 / v1.4 的 system 判定逻辑没有删，只是退到 `trimHistory: true` 后面。
+
+自检 18 项全通过，含真实翻译、图片、流式与 Origin 头断言。
+
 ### v1.4：修复 SnowShot 截图翻译「把报错翻译成一份解决方案」
 
 现象：用 SnowShot 截图翻译一段英文报错，返回的却是一份中文「故障排查指南」（`### Steps to Fix: 1. **Use the Correct Passphrase** …`），700 tokens 起步。
@@ -188,7 +204,7 @@ magpie provider test index-translate
 | `Index-Homura-9B` | 配音台词：按目标音节数控制译文长度 | 32K | — |
 | `Index-Homura-2B` | 配音台词轻量版 | 32K | — |
 
-模型表默认**静态、不联网刷新**（magpie 对模型列表钩子有 20s 超时，静态表更稳）。需要跟随官方上新模型时把 `dynamicModels` 设为 `true`，失败会自动回退到静态表。语音模型（Index-Echo S2TT / S2ST）不在列表里：它们需要官方推理包处理音频，不能走 chat completions 文本接口。
+模型表**默认动态刷新**：加载时请求一次 `<Base URL>/models`，成功结果缓存 5 分钟，5 秒超时，任何失败都静默回退到上面的静态表——网络抖动不会让插件不可用。想要完全离线、零联网钩子，把 `dynamicModels` 设为 `false`。语音模型（Index-Echo S2TT / S2ST）不在列表里：它们需要官方推理包处理音频，不能走 chat completions 文本接口。
 
 所有模型标了 `free: true`，不占 magpie 的额度统计。并发默认限制为 2，避免给公共接口添压力。
 
@@ -203,7 +219,8 @@ magpie provider test index-translate
 - 删除 `tools`、`tool_choice`、`response_format` 等字段 —— 官方接口带 `tools` 会直接 400（`"auto" tool choice requires --enable-auto-tool-choice`）。这也是为什么模型表不标 `tool_call: false`：既让模型能被 agent 选中，又不会真的把工具定义发给翻译模型。
 - 把 `max_tokens` 夹到 4096 —— 超上限会 400（`max_tokens cannot be greater than max_model_len`）。
 - 强制 `chat_template_kwargs.enable_thinking = false`，并兜底清理 `<think>` 标签，否则思维链会顶掉译文。
-- 只保留最后一条 `user` 消息，默认丢掉 agent 的超长 system prompt（翻译模型按单轮指令训练）。
+- 删掉 `Origin` 请求头 —— 浏览器形态的 Origin 会触发官方 WAF。
+- **不改 `messages`**：system 与多轮历史原样透传（v2.0 起）。客户端把翻译指令写在 system 里也照样生效；只有显式开 `trimHistory` 才会裁成「最后一条 user + 判定后的 system」。
 - 带上官方约定请求头 `User-Agent: Index-Translate-Client/1.0`。
 
 **最简指令**（直接发给该模型）：
@@ -241,13 +258,14 @@ magpie provider test index-translate
 默认值已经调好，一般不用改。需要调整时：
 
 ```powershell
-magpie plugin options index-translate '{"maxTokens":8192,"keepSystem":true}'
+magpie plugin options index-translate '{"maxTokens":8192,"dynamicModels":false}'
 ```
 
 | 选项 | 默认 | 说明 |
 | --- | --- | --- |
-| `dynamicModels` | `false` | 是否注册 `provider.models` / `auth.usage` 两个联网钩子，动态刷新官方模型列表。默认关闭更稳。 |
-| `keepSystem` | `false` | 强制保留所有 ≤800 字符的 system。含翻译/语言关键词的指令本来就会自动保留，通常不用开这个开关。 |
+| `dynamicModels` | `true` | 注册 `provider.models` / `auth.usage` 两个钩子动态刷新官方模型列表（5 分钟缓存 + 5 秒超时 + 静态表兜底）。想完全离线设 `false`。 |
+| `trimHistory` | `false` | 只留最后一条 `user` 消息（v1.x 行为）。默认透传全部 messages；只有确认客户端历史会污染译文时才开。 |
+| `keepSystem` | `false` | 仅在 `trimHistory: true` 时生效：连不含翻译关键词的中等长度 system 也保留。 |
 | `maxTokens` | `4096` | 请求输出上限。跑 Nailong 长文档可调到 `16384`，但别用到 35B 上（会超模型上限）。 |
 | `temperature` | `0` | agent 没指定时的默认值，官方推荐 greedy。Homura 建议 0.3，可在单次请求里覆盖。 |
 | `stripThinking` | `true` | 兜底清理非流式响应里的 `<think>…</think>`。 |
@@ -316,7 +334,7 @@ node selftest.mjs
 
 | 文件 | 作用 |
 | --- | --- |
-| `index.mjs` | 插件入口，只导出一个函数（magpie 会把入口导出的每个函数都当插件跑）。默认只提供 `config` / `auth` 钩子，无联网钩子。 |
+| `index.mjs` | 插件入口，`export default { id, server }`。负责 `config` / `auth` / `provider` 钩子与请求改写。 |
 | `lib.mjs` | 内部纯函数：静态模型表、请求规范化、响应清洗、模型映射、地址解析。零外部依赖。 |
 | `selftest.mjs` | 自检脚本，Node 18+ 直接跑。 |
 | `package.json` | 清单与 `magpie` 扩展字段（名称、图标、简介、并发、建议选项）。 |
@@ -328,5 +346,6 @@ node selftest.mjs
 - GitHub（免费 API、call_api.py、prompts、自建部署）：https://github.com/bilibili/Index-Translate
 - magpie 插件文档：https://usemagpie.ai/docs/zh/plugins
 - magpie 社区插件仓库：https://github.com/magpie-community/plugins
+- 同类实现（v2.0 的「最小干预」思路与 Origin / 动态模型列表做法来自这里）：https://github.com/Kleistr/magpie-bilibili-translate （MIT）
 
 > 官方项目采用 Apache-2.0；本插件为独立封装，未包含任何官方模型权重。公共免费接口请按官方用途合理使用。

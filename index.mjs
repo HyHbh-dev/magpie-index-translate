@@ -1,5 +1,5 @@
 /**
- * magpie-index-translate v1.4
+ * magpie-index-translate v2.0
  *
  * 把 B 站 Index-Translate 模型家族接成 magpie / OpenCode 的供应商插件。
  * 默认直连官方免费公共 API（OpenAI 兼容、无需 GPU、无需密钥），
@@ -9,29 +9,23 @@
  *  - https://index-translate.bilibili.com/
  *  - https://github.com/bilibili/Index-Translate （Free Online API / call_api.py / prompts.md）
  *  - https://usemagpie.ai/docs/zh/plugins （编写插件）
+ *  - https://github.com/Kleistr/magpie-bilibili-translate （「最小干预」思路来源）
  *
- * v1.1 稳健化改写（对照本机已验证可用的 magpie-bilibili-translate）：
- *  1) 默认只用 config 里的静态模型表，不注册会联网的 provider.models / auth.usage 钩子。
- *     magpie 对模型列表钩子有 20s 超时，免费公共 API 偶尔慢，联网钩子容易拖垮插件加载。
- *     需要动态刷新时把选项 dynamicModels 设为 true。
- *  2) loader 无条件可用：没有登录记录也能发请求（免费 API 本来就不需要密钥）。
- *  3) 模型不再标 tool_call:false。magpie 会把这类模型从 agent / auto 模型组里过滤掉，
- *     表现为 `group/auto-index-translate-9b -> 404 unknown model`。
- *     兼容性改由 fetch 删除 tools 字段来保证，模型仍然会出现在可选列表里。
- *  4) 保留 v1.0 的请求规范化：删 tools、夹 max_tokens、关 thinking、
- *     只留最后一条 user 消息、兜底清洗 <think>。
- *  5) v1.2：流式请求强制带 stream_options.include_usage，让官方服务端在最后一个
- *     chunk 回传 prompt/completion_tokens。否则 magpie 的用量面板永远是 0/0。
- *     非流式请求会去掉该字段；自建服务不认时把选项 includeUsage 设为 false。
- *  6) v1.3：system 不再无脑丢弃。翻译扩展的「Translate into Simplified Chinese」
- *     就写在 system 里，丢了模型会回一大段解释（表现为「翻译结果是一大串」）。
- *     现在按内容判定：>800 字符丢；含翻译/语言关键词的短 system 保留为独立 system 消息。
- *  7) v1.4：v1.3 的「>800 字符丢」也会误伤——SnowShot 的 translationSystemPrompt
- *     有 1855 字符，被丢掉后就变成「把报错翻译成一份解决方案」。
- *     现在含翻译/语言关键词的 system 不论多长都保留，8000 字符才是硬上限。
- *     另加 capturePath 选项（默认关）：把原始/规范化后的请求体写入 jsonl，用于排障。
+ * 设计原则：**只在会 400 的地方动手**。
  *
- * 入口模块只导出一个函数：magpie 会把「导出的每个函数」都当作插件执行。
+ * v2.0（合并两个同类插件的优点）
+ *  1) 消息不再裁剪。默认把 messages 原样透传（含 system 与全部历史），
+ *     与 Kleistr 版一致；v1.3/v1.4 的两轮补丁（system 关键词判定、8000 字符上限）
+ *     只在 trimHistory=true 时才会走到。少改一处，就少一个 bug 来源。
+ *  2) 删掉 Origin 请求头。浏览器形态的 Origin 会触发官方 WAF，官方代理同样会删。
+ *  3) 模型列表默认动态刷新：拉 /v1/models，5 分钟缓存 + 5 秒超时 + 静态表兜底，
+ *     失败不影响加载。要完全离线可设 dynamicModels:false。
+ *  4) 入口改成 `export default { id, server }`（官方文档推荐形态），
+ *     避免「导出的每个函数都被当成插件」这一类事故。
+ *  5) 保留 v1.2 的用量修复：流式请求强制 stream_options.include_usage，
+ *     否则 magpie 面板里的输入/输出 token 永远是 0（Kleistr 版没有处理这点）。
+ *
+ * 其余历史修复见 README「版本修复记录」。
  */
 
 import {
@@ -48,10 +42,35 @@ import {
   isSpeechModel,
 } from "./lib.mjs"
 
-export const IndexTranslateAuth = async (input = {}, options = {}) => {
+/** 模型列表缓存：成功的结果才缓存，避免把一次网络抖动冻结成整个会话。 */
+const MODELS_CACHE_TTL_MS = 5 * 60 * 1000
+const modelsCache = new Map()
+
+function cacheKey(baseURL, key) {
+  return `${baseURL}|${key}`
+}
+
+function cachedModels(baseURL, key) {
+  const hit = modelsCache.get(cacheKey(baseURL, key))
+  if (!hit) return undefined
+  if (hit.expires <= Date.now()) {
+    modelsCache.delete(cacheKey(baseURL, key))
+    return undefined
+  }
+  return hit.models
+}
+
+function putModelsCache(baseURL, key, models) {
+  modelsCache.set(cacheKey(baseURL, key), {
+    expires: Date.now() + MODELS_CACHE_TTL_MS,
+    models,
+  })
+}
+
+const server = async (input = {}, options = {}) => {
   const opts = mergeOptions(input, options)
 
-  /** 只有 dynamicModels=true 时才会被调用；失败一律静默回退到静态表。 */
+  /** 失败一律静默回退到静态表——模型列表拿不到不该让插件不可用。 */
   const fetchModels = async (auth) => {
     const { baseURL, key } = resolveEndpoint(auth, opts)
     const res = await fetch(`${baseURL}/models`, {
@@ -141,6 +160,8 @@ export const IndexTranslateAuth = async (input = {}, options = {}) => {
           async fetch(url, init = {}) {
             const headers = new Headers(init.headers)
             headers.set("user-agent", USER_AGENT)
+            // 浏览器形态的 Origin 会触发官方 WAF（官方代理同样会删掉它）。
+            headers.delete("origin")
 
             let body = init.body
             let streaming = false
@@ -208,24 +229,36 @@ export const IndexTranslateAuth = async (input = {}, options = {}) => {
     },
   }
 
-  // 可选：动态模型与额度健康检查。默认关闭，避免联网钩子影响插件加载。
-  if (opts.dynamicModels) {
+  // 动态模型：默认开启，但只影响模型列表，失败一律回退静态表。
+  if (opts.dynamicModels !== false) {
     hooks.provider = {
       id: PROVIDER,
       async models(provider, ctx = {}) {
-        const fallback = provider?.models || STATIC_MODELS
+        const fallback =
+          provider?.models && Object.keys(provider.models).length
+            ? provider.models
+            : STATIC_MODELS
+
+        const { baseURL, key } = resolveEndpoint(ctx?.auth, opts)
+        const hit = cachedModels(baseURL, key)
+        if (hit) return hit
+
         try {
           const list = await fetchModels(ctx?.auth)
           const usable = list.filter((m) => m?.id && !isSpeechModel(m.id))
           if (!usable.length) return fallback
-          return Object.fromEntries(
+          const models = Object.fromEntries(
             usable.map((m) => [String(m.id), modelFromApi(m, fallback)]),
           )
+          putModelsCache(baseURL, key, models)
+          return models
         } catch {
+          // 不缓存失败结果：网络恢复后下一次调用应该能拿到真实列表。
           return fallback
         }
       },
     }
+
     hooks.auth.usage = async (getAuth) => {
       let auth
       try {
@@ -254,3 +287,7 @@ export const IndexTranslateAuth = async (input = {}, options = {}) => {
 
   return hooks
 }
+
+// 官方推荐的入口形态：`export default { id, server }`。
+// 这样入口模块里的辅助函数不会被误当成插件执行（测试用的纯函数都在 lib.mjs）。
+export default { id: PROVIDER, server }

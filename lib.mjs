@@ -1,8 +1,9 @@
 /**
  * lib.mjs — magpie-index-translate 的内部实现。
  *
- * 这个文件不是插件入口：magpie 会把入口模块导出的「每个函数」都当成插件运行，
- * 因此入口 index.mjs 只导出一个函数，其余纯函数都放在这里，供 selftest.mjs 复用。
+ * 这个文件不是插件入口：入口 index.mjs 用官方推荐的 `export default { id, server }`
+ * 形态导出，纯函数都放在这里供 selftest.mjs 复用（入口模块别导出函数，
+ * 否则会被 magpie 当成第二个插件执行）。
  * 零外部依赖，Bun / Node 18+ 均可直接运行。
  */
 
@@ -13,8 +14,11 @@ export const DEFAULT_MODEL = "Index-Translate-35B-A3B"
 
 /** 插件选项的默认值，可被 plugins.json 的 options 或 magpie.option 覆盖。 */
 export const DEFAULTS = Object.freeze({
-  // 含翻译/语言关键词的 system 不限长度自动保留（SnowShot 的指令有 1800+ 字符），
-  // 不需要开这个开关；设为 true 则连不含关键词的中等长度 system 也保留。
+  // v2.0：默认把 messages 原样透传（system 与全部历史都不动）。
+  // 置 true 才启用 v1.x 的裁剪：只留最后一条 user + 按 pickSystem 判定 system。
+  // 只在你确认「客户端发的历史会污染译文」时才需要开。
+  trimHistory: false,
+  // 仅在 trimHistory=true 时生效：连不含翻译关键词的中等长度 system 也保留。
   keepSystem: false,
   // 官方公共 API 对 max_tokens 有硬上限，超出直接 400。统一夹到这个值。
   maxTokens: 4096,
@@ -25,9 +29,9 @@ export const DEFAULTS = Object.freeze({
   // 流式请求带 stream_options.include_usage，让响应末尾回传真实 token 数。
   // magpie 靠它统计输入/输出 token；自建服务不认这个字段时设为 false。
   includeUsage: true,
-  // 默认关闭：开启后才注册 provider.models / auth.usage 这两个联网钩子。
-  // magpie 对模型列表钩子有 20s 超时，免费公共 API 偶尔慢，静态表更稳。
-  dynamicModels: false,
+  // v2.0：默认开启动态模型列表（5 分钟缓存 + 5 秒超时 + 静态表兜底）。
+  // 想要完全离线、零联网钩子，设为 false。
+  dynamicModels: true,
   // 排错用：填一个文件路径，就会把每个进来的原始请求体按行追加进去（JSONL）。
   // 用来确认调用方到底发了什么 messages，默认关闭。
   capturePath: "",
@@ -228,10 +232,12 @@ export function normalizeRequest(body, opts = {}) {
     delete b.stream_options
   }
 
-  // 翻译模型按「单轮 user 指令」训练，只保留最后一条 user 消息。
-  // system 走 pickSystem 判定：翻译指令保留（否则模型不知道目标语言，会回一大段解释），
-  // agent 的超长角色设定丢弃。
-  if (Array.isArray(b.messages) && b.messages.length > 0) {
+  // v2.0：默认不改 messages。翻译指令、system、多轮历史一律原样透传——
+  // 少改一处就少一个 bug 来源（v1.2~v1.4 的三个问题全由这里引发）。
+  // 只有显式开 trimHistory 时才走 v1.x 的裁剪逻辑：
+  //   翻译模型按「单轮 user 指令」训练，只保留最后一条 user 消息；
+  //   system 走 pickSystem 判定（翻译指令保留，agent 的超长角色设定丢弃）。
+  if (opts.trimHistory === true && Array.isArray(b.messages) && b.messages.length > 0) {
     const lastUser = [...b.messages].reverse().find((m) => m && m.role === "user")
     if (lastUser) {
       const system = pickSystem(b.messages, !!opts.keepSystem)
@@ -324,6 +330,8 @@ export function modelFromApi(m, existing = {}) {
       (Array.isArray(m.input_modalities) && m.input_modalities.includes("image")),
   )
 
+  const inputs = vision ? ["text", "image"] : ["text"]
+
   return {
     ...fallback,
     id,
@@ -333,7 +341,19 @@ export function modelFromApi(m, existing = {}) {
       // 官方给长文档模型报的是 229376，直接透给 agent 会诱发超大 max_tokens。
       output: Math.max(256, Math.min(output, 16384)),
     },
-    modalities: { input: vision ? ["text", "image"] : ["text"], output: ["text"] },
+    modalities: { input: inputs, output: ["text"] },
+    // provider.models 钩子要的是 OpenCode 的 Model 形态（capabilities），
+    // config 钩子要的是 modalities。两个都给，哪条路径读哪个都不会错——
+    // magpie 从 capabilities.input 判断图片支持，漏了它截图会走错模型。
+    capabilities: {
+      temperature: true,
+      reasoning: false,
+      attachment: vision,
+      toolcall: false,
+      input: Object.fromEntries(inputs.map((kind) => [kind, true])),
+      output: { text: true },
+    },
+    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
     free: true,
   }
 }

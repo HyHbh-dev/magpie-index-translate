@@ -1,7 +1,7 @@
 {
   "name": "magpie-index-translate",
-  "version": "1.4.0",
-  "description": "Magpie / OpenCode provider plugin for the Bilibili Index-Translate free public API (static model table, no network hooks by default, real token usage)",
+  "version": "2.0.0",
+  "description": "Magpie / OpenCode provider plugin for the Bilibili Index-Translate free public API (messages passed through untouched, dynamic model list with cache, real token usage)",
   "type": "module",
   "main": "./index.mjs",
   "files": [
@@ -28,13 +28,13 @@
     "icon": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2300A1D6'/%3E%3Ctext x='32' y='42' font-size='28' font-family='Arial,sans-serif' font-weight='bold' text-anchor='middle' fill='white'%3EIT%3C/text%3E%3C/svg%3E",
     "maxConcurrency": 2,
     "options": {
-      "dynamicModels": false,
+      "dynamicModels": true,
       "includeUsage": true,
-      "keepSystem": false,
       "maxTokens": 4096,
       "temperature": 0,
       "stripThinking": true,
-      "timeoutMs": 120000
+      "timeoutMs": 120000,
+      "trimHistory": false
     }
   }
 }

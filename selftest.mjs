@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict"
-import { IndexTranslateAuth } from "./index.mjs"
+import entry from "./index.mjs"
 import {
   PROVIDER,
   DEFAULT_BASE,
@@ -19,6 +19,8 @@ import {
   resolveEndpoint,
   isSpeechModel,
 } from "./lib.mjs"
+
+const IndexTranslatePlugin = entry.server
 
 let failed = 0
 let passed = 0
@@ -45,7 +47,13 @@ console.log("\nmagpie-index-translate 自检")
 console.log("─".repeat(56))
 console.log("1/2  离线逻辑（不联网）")
 
-await check("请求规范化：删除 tools、夹住 max_tokens、关闭 thinking", () => {
+await check("入口形态：export default { id, server }（辅助函数不会被当成插件）", () => {
+  assert.equal(entry.id, PROVIDER)
+  assert.equal(typeof entry.server, "function")
+  assert.deepEqual(Object.keys(entry).sort(), ["id", "server"])
+})
+
+await check("请求规范化：删 tools、夹 max_tokens、关 thinking（messages 不动）", () => {
   const out = normalizeRequest(
     {
       model: DEFAULT_MODEL,
@@ -65,24 +73,41 @@ await check("请求规范化：删除 tools、夹住 max_tokens、关闭 thinkin
   assert.equal(out.response_format, undefined)
   assert.equal(out.max_tokens, 4096)
   assert.equal(out.chat_template_kwargs.enable_thinking, false)
-  assert.equal(out.messages.length, 1)
-  assert.equal(out.messages[0].role, "user")
-  assert.match(out.messages[0].content, /你好/)
+  // v2.0：默认不再裁剪消息，system 与全部历史原样保留。
+  assert.equal(out.messages.length, 2)
+  assert.equal(out.messages[0].role, "system")
+  assert.match(out.messages[0].content, /Claude Code/)
+  assert.match(out.messages[1].content, /你好/)
 })
 
-await check("system 判定：翻译指令不受长度限制，agent 角色设定仍丢弃", () => {
-  // 短指令：透传
-  const short = { messages: [{ role: "system", content: "只输出译文" }, { role: "user", content: "你好" }] }
-  assert.match(normalizeRequest(short, {}).messages[0].content, /只输出译文/)
+await check("默认透传多轮历史（v2.0 不再只留最后一条 user）", () => {
+  const messages = [
+    { role: "system", content: "You are a translation engine. Translate into Simplified Chinese." },
+    { role: "user", content: "Hello, world." },
+    { role: "assistant", content: "你好，世界。" },
+    { role: "user", content: "Good morning." },
+  ]
+  const out = normalizeRequest({ messages }, {})
+  assert.equal(out.messages.length, 4)
+  assert.equal(out.messages[3].content, "Good morning.")
+  assert.equal(out.messages[0].role, "system")
+})
 
+await check("trimHistory=true 时才回到 v1.x 裁剪：只留最后一条 user + 判定 system", () => {
   // SnowShot 截图翻译的 system 有 1800+ 字符，必须整段保留。
   const snowshot =
     "You are the translation engine for Snow Shot's screenshot text editor.\n".repeat(24) +
     "Return only the translated text."
   assert.ok(snowshot.length > 1500, `样例只有 ${snowshot.length} 字符`)
   const kept = normalizeRequest(
-    { messages: [{ role: "system", content: snowshot }, { role: "user", content: "hello" }] },
-    {},
+    {
+      messages: [
+        { role: "system", content: snowshot },
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "你好" },
+      ],
+    },
+    { trimHistory: true },
   )
   assert.equal(kept.messages.length, 2)
   assert.equal(kept.messages[0].role, "system")
@@ -92,7 +117,7 @@ await check("system 判定：翻译指令不受长度限制，agent 角色设定
   const huge = {
     messages: [{ role: "system", content: "x".repeat(9000) }, { role: "user", content: "你好" }],
   }
-  const dropped = normalizeRequest(huge, { keepSystem: true })
+  const dropped = normalizeRequest(huge, { trimHistory: true, keepSystem: true })
   assert.equal(dropped.messages.length, 1)
   assert.equal(dropped.messages[0].role, "user")
 
@@ -100,8 +125,8 @@ await check("system 判定：翻译指令不受长度限制，agent 角色设定
   const mid = {
     messages: [{ role: "system", content: "y".repeat(2000) }, { role: "user", content: "你好" }],
   }
-  assert.equal(normalizeRequest(mid, {}).messages.length, 1)
-  assert.equal(normalizeRequest(mid, { keepSystem: true }).messages.length, 2)
+  assert.equal(normalizeRequest(mid, { trimHistory: true }).messages.length, 1)
+  assert.equal(normalizeRequest(mid, { trimHistory: true, keepSystem: true }).messages.length, 2)
 })
 
 await check("图片消息（content 数组）规范化后不被破坏", () => {
@@ -139,36 +164,40 @@ await check("流式请求强制带 stream_options.include_usage（否则 token �
   assert.equal(off.stream_options, undefined)
 })
 
-await check("翻译指令写在 system 里时自动保留（否则模型会回一大段解释）", () => {
-  const withDirective = normalizeRequest({
-    messages: [
-      { role: "system", content: "You are a translation engine. Translate into Simplified Chinese." },
-      { role: "user", content: "Hello, world." },
-    ],
-  })
-  assert.equal(withDirective.messages.length, 2)
-  assert.equal(withDirective.messages[0].role, "system")
-  assert.match(withDirective.messages[0].content, /Translate into Simplified Chinese/)
-  assert.equal(withDirective.messages[1].content, "Hello, world.")
+await check("fetch 钩子：删掉 Origin（会触发 WAF）、固定 UA", async () => {
+  const hooks = await IndexTranslatePlugin({ magpie: { options: {} } }, { dynamicModels: false })
+  const loaded = await hooks.auth.loader(async () => ({
+    type: "api",
+    key: "index",
+    metadata: { endpoint: "public" },
+  }))
 
-  // 中文指令同样能识别。
-  const zh = normalizeRequest({
-    messages: [
-      { role: "system", content: "请把下面的内容翻译成简体中文，只输出译文。" },
-      { role: "user", content: "Good morning." },
-    ],
-  })
-  assert.equal(zh.messages[0].role, "system")
+  const realFetch = globalThis.fetch
+  let seen = null
+  globalThis.fetch = async (url, init) => {
+    seen = new Headers(init.headers)
+    return new Response("{}", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })
+  }
+  try {
+    await loaded.fetch(`${DEFAULT_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://snowshot.app",
+        authorization: "Bearer index",
+      },
+      body: JSON.stringify({ messages: [{ role: "user", content: "你好" }] }),
+    })
+  } finally {
+    globalThis.fetch = realFetch
+  }
 
-  // 泛泛的 agent 角色设定仍然丢弃，避免污染译文。
-  const agent = normalizeRequest({
-    messages: [
-      { role: "system", content: "You are Claude Code. Always use tools and be concise." },
-      { role: "user", content: "Good morning." },
-    ],
-  })
-  assert.equal(agent.messages.length, 1)
-  assert.equal(agent.messages[0].role, "user")
+  assert.equal(seen.get("origin"), null, "Origin 没有被删掉")
+  assert.equal(seen.get("user-agent"), "Index-Translate-Client/1.0")
+  assert.equal(seen.get("authorization"), "Bearer index")
 })
 
 await check("<think> 兜底清洗", () => {
@@ -207,7 +236,7 @@ await check("模型表不带 tool_call:false（否则会被 magpie 从 agent 组
 console.log("\n2/2  钩子与真实接口（需要联网）")
 
 const input = { magpie: { options: {} }, directory: process.cwd() }
-const hooks = await IndexTranslateAuth(input, {})
+const hooks = await IndexTranslatePlugin(input, {})
 const cfg = {}
 
 await check("config 钩子声明供应商与静态模型", async () => {
@@ -217,9 +246,12 @@ await check("config 钩子声明供应商与静态模型", async () => {
   assert.equal(Object.keys(cfg.provider[PROVIDER].models).length, Object.keys(STATIC_MODELS).length)
 })
 
-await check("默认不注册联网钩子（provider.models / auth.usage）", () => {
-  assert.equal(hooks.provider, undefined)
-  assert.equal(hooks.auth.usage, undefined)
+await check("默认注册动态模型钩子（dynamicModels:false 可关掉）", async () => {
+  assert.equal(typeof hooks.provider.models, "function")
+  assert.equal(typeof hooks.auth.usage, "function")
+  const offline = await IndexTranslatePlugin(input, { dynamicModels: false })
+  assert.equal(offline.provider, undefined)
+  assert.equal(offline.auth.usage, undefined)
 })
 
 const auth = { type: "api", key: "index", metadata: { endpoint: "public" } }
@@ -232,18 +264,27 @@ await check("loader 未登录也能用", async () => {
   assert.equal(typeof bare.fetch, "function")
 })
 
-await check("dynamicModels=true 时才注册动态模型与 usage 钩子", async () => {
-  const dynamic = await IndexTranslateAuth(input, { dynamicModels: true })
-  assert.equal(typeof dynamic.provider.models, "function")
-  assert.equal(typeof dynamic.auth.usage, "function")
-  const models = await dynamic.provider.models(cfg.provider[PROVIDER], { auth })
+await check("动态模型列表：真实拉取 + capabilities + 命中缓存", async () => {
+  const models = await hooks.provider.models(cfg.provider[PROVIDER], { auth })
   const ids = Object.keys(models)
   assert.ok(ids.length >= 7, `只拿到 ${ids.length} 个模型`)
   assert.ok(ids.includes(DEFAULT_MODEL))
   assert.ok(!ids.some(isSpeechModel))
-  assert.equal(models[DEFAULT_MODEL].free, true)
-  assert.notEqual(models[DEFAULT_MODEL].tool_call, false)
-  const usage = await dynamic.auth.usage(getAuth)
+
+  const vision = models[DEFAULT_MODEL]
+  assert.equal(vision.free, true)
+  assert.notEqual(vision.tool_call, false)
+  // provider.models 钩子要 OpenCode 的 Model 形态，magpie 从 capabilities.input 读图片支持。
+  assert.equal(vision.capabilities.input.image, true)
+  assert.equal(vision.capabilities.attachment, true)
+  assert.equal(vision.modalities.input.includes("image"), true)
+  assert.deepEqual(vision.cost, { input: 0, output: 0, cache: { read: 0, write: 0 } })
+
+  // 第二次应命中 5 分钟缓存，返回同一份对象引用。
+  const again = await hooks.provider.models(cfg.provider[PROVIDER], { auth })
+  assert.equal(again, models)
+
+  const usage = await hooks.auth.usage(getAuth)
   assert.ok(usage.plan)
   assert.ok(!usage.error, usage.error)
 })
