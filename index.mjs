@@ -1,5 +1,5 @@
 /**
- * magpie-index-translate
+ * magpie-index-translate v1.1
  *
  * 把 B 站 Index-Translate 模型家族接成 magpie / OpenCode 的供应商插件。
  * 默认直连官方免费公共 API（OpenAI 兼容、无需 GPU、无需密钥），
@@ -9,6 +9,17 @@
  *  - https://index-translate.bilibili.com/
  *  - https://github.com/bilibili/Index-Translate （Free Online API / call_api.py / prompts.md）
  *  - https://usemagpie.ai/docs/zh/plugins （编写插件）
+ *
+ * v1.1 稳健化改写（对照本机已验证可用的 magpie-bilibili-translate）：
+ *  1) 默认只用 config 里的静态模型表，不注册会联网的 provider.models / auth.usage 钩子。
+ *     magpie 对模型列表钩子有 20s 超时，免费公共 API 偶尔慢，联网钩子容易拖垮插件加载。
+ *     需要动态刷新时把选项 dynamicModels 设为 true。
+ *  2) loader 无条件可用：没有登录记录也能发请求（免费 API 本来就不需要密钥）。
+ *  3) 模型不再标 tool_call:false。magpie 会把这类模型从 agent / auto 模型组里过滤掉，
+ *     表现为 `group/auto-index-translate-9b -> 404 unknown model`。
+ *     兼容性改由 fetch 删除 tools 字段来保证，模型仍然会出现在可选列表里。
+ *  4) 保留 v1.0 的请求规范化：删 tools、夹 max_tokens、关 thinking、
+ *     只留最后一条 user 消息、兜底清洗 <think>。
  *
  * 入口模块只导出一个函数：magpie 会把「导出的每个函数」都当作插件执行。
  */
@@ -30,7 +41,7 @@ import {
 export const IndexTranslateAuth = async (input = {}, options = {}) => {
   const opts = mergeOptions(input, options)
 
-  /** 拉取 /v1/models，失败时原样返回已有列表（magpie 会保留原列表）。 */
+  /** 只有 dynamicModels=true 时才会被调用；失败一律静默回退到静态表。 */
   const fetchModels = async (auth) => {
     const { baseURL, key } = resolveEndpoint(auth, opts)
     const res = await fetch(`${baseURL}/models`, {
@@ -38,15 +49,15 @@ export const IndexTranslateAuth = async (input = {}, options = {}) => {
         "user-agent": USER_AGENT,
         authorization: `Bearer ${key}`,
       },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(5000),
     })
     if (!res.ok) throw new Error(`/v1/models answered ${res.status}`)
     const data = await res.json()
     return Array.isArray(data?.data) ? data.data : []
   }
 
-  return {
-    /** 声明供应商与默认模型。用 ??= 以免覆盖用户在 plugins.json 里的配置。 */
+  const hooks = {
+    /** 声明供应商与静态模型。用 ??= 以免覆盖用户在 plugins.json 里的配置。 */
     config: async (cfg) => {
       cfg.provider ??= {}
       cfg.provider[PROVIDER] ??= {
@@ -61,8 +72,8 @@ export const IndexTranslateAuth = async (input = {}, options = {}) => {
       provider: PROVIDER,
 
       /**
-       * 一次登录即可用。prompts 的回答由 magpie 自动存进 auth.metadata。
-       * 官方公共 API 不校验密钥，输入框里随便填一个（例如 index）即可。
+       * 登录不是必需的。prompts 的回答由 magpie 自动存进 auth.metadata：
+       * 选 custom 时用于切换到自建服务；选 public 时走官方免费接口。
        */
       methods: [
         {
@@ -102,10 +113,14 @@ export const IndexTranslateAuth = async (input = {}, options = {}) => {
         },
       ],
 
-      /** 每个账号运行一次，返回 AI SDK 会用到的 baseURL / apiKey / fetch。 */
+      /** 无条件返回 baseURL + fetch：有没有登录都直接可用。 */
       async loader(getAuth) {
-        const auth = await getAuth()
-        if (!auth || auth.type !== "api") return {}
+        let auth
+        try {
+          auth = typeof getAuth === "function" ? await getAuth() : undefined
+        } catch {
+          auth = undefined
+        }
         const { baseURL, key } = resolveEndpoint(auth, opts)
 
         return {
@@ -156,34 +171,12 @@ export const IndexTranslateAuth = async (input = {}, options = {}) => {
           },
         }
       },
-
-      /** magpie 自有钩子：把 /v1/models 当作一次轻量健康检查，显示在 magpie quota。 */
-      async usage(getAuth) {
-        const auth = await getAuth()
-        const { baseURL, isPublic } = resolveEndpoint(auth, opts)
-        try {
-          const list = await fetchModels(auth)
-          return {
-            plan: isPublic ? "官方免费公共 API" : `自建服务 · ${baseURL}`,
-            windows: [
-              {
-                name: "可用模型",
-                display: `${list.length} 个模型 · 免密钥 · 请勿高频调用`,
-                aside: true,
-              },
-            ],
-          }
-        } catch (error) {
-          return {
-            error: `连接失败：${error?.message || error}`,
-            windows: [],
-          }
-        }
-      },
     },
+  }
 
-    /** magpie 为每个账号调用一次，按账号列出模型；失败时保留原列表。 */
-    provider: {
+  // 可选：动态模型与额度健康检查。默认关闭，避免联网钩子影响插件加载。
+  if (opts.dynamicModels) {
+    hooks.provider = {
       id: PROVIDER,
       async models(provider, ctx = {}) {
         const fallback = provider?.models || STATIC_MODELS
@@ -198,6 +191,32 @@ export const IndexTranslateAuth = async (input = {}, options = {}) => {
           return fallback
         }
       },
-    },
+    }
+    hooks.auth.usage = async (getAuth) => {
+      let auth
+      try {
+        auth = typeof getAuth === "function" ? await getAuth() : undefined
+      } catch {
+        auth = undefined
+      }
+      const { baseURL, isPublic } = resolveEndpoint(auth, opts)
+      try {
+        const list = await fetchModels(auth)
+        return {
+          plan: isPublic ? "官方免费公共 API" : `自建服务 · ${baseURL}`,
+          windows: [
+            {
+              name: "可用模型",
+              display: `${list.length} 个模型 · 免密钥 · 请勿高频调用`,
+              aside: true,
+            },
+          ],
+        }
+      } catch (error) {
+        return { error: `连接失败：${error?.message || error}`, windows: [] }
+      }
+    }
   }
+
+  return hooks
 }

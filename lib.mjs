@@ -22,68 +22,61 @@ export const DEFAULTS = Object.freeze({
   // 兜底清理 <think>…</think>（服务端已通过 chat_template_kwargs 强制关闭思考）。
   stripThinking: true,
   timeoutMs: 120000,
+  // 默认关闭：开启后才注册 provider.models / auth.usage 这两个联网钩子。
+  // magpie 对模型列表钩子有 20s 超时，免费公共 API 偶尔慢，静态表更稳。
+  dynamicModels: false,
 })
 
 /**
- * 没有登录、或 /v1/models 拉取失败时使用的静态模型表。
+ * 静态模型表（默认唯一来源，不联网）。
  * 语音模型（Index-Echo S2TT/S2ST）不在此列出：它们需要官方推理包处理音频，
  * 不能通过 chat completions 文本接口调用，列出来只会让用户误选。
+ *
+ * 注意：这里刻意不写 tool_call:false。magpie 会把标记了「不支持工具调用」的模型
+ * 从 agent / auto 模型组里过滤掉，表现为 `group/auto-index-translate-9b -> 404 unknown model`。
+ * 兼容性由 index.mjs 的 fetch 删除 tools 字段来保证。
  */
 export const STATIC_MODELS = {
   "Index-Translate-35B-A3B": {
     name: "Index-Translate 35B-A3B · 旗舰 / 图片翻译",
     limit: { context: 24576, output: 4096 },
     modalities: { input: ["text", "image"], output: ["text"] },
-    tool_call: false,
-    reasoning: false,
     free: true,
   },
   "Index-Translate-9B": {
     name: "Index-Translate 9B · 均衡",
     limit: { context: 32768, output: 4096 },
     modalities: { input: ["text"], output: ["text"] },
-    tool_call: false,
-    reasoning: false,
     free: true,
   },
   "Index-Translate-2B": {
     name: "Index-Translate 2B · 轻量 / 最快",
     limit: { context: 32768, output: 4096 },
     modalities: { input: ["text"], output: ["text"] },
-    tool_call: false,
-    reasoning: false,
     free: true,
   },
   "Index-Nailong-9B": {
     name: "Index-NativeLong 9B · 长文档 / 整本小说",
     limit: { context: 229376, output: 16384 },
     modalities: { input: ["text"], output: ["text"] },
-    tool_call: false,
-    reasoning: false,
     free: true,
   },
   "Index-Nailong-2B": {
     name: "Index-NativeLong 2B · 长文档 / 轻量",
     limit: { context: 262144, output: 16384 },
     modalities: { input: ["text"], output: ["text"] },
-    tool_call: false,
-    reasoning: false,
     free: true,
   },
   "Index-Homura-9B": {
     name: "Index-Homura 9B · 配音音节数控制",
     limit: { context: 32768, output: 4096 },
     modalities: { input: ["text"], output: ["text"] },
-    tool_call: false,
-    reasoning: false,
     free: true,
   },
   "Index-Homura-2B": {
     name: "Index-Homura 2B · 配音音节数控制 / 轻量",
     limit: { context: 32768, output: 4096 },
     modalities: { input: ["text"], output: ["text"] },
-    tool_call: false,
-    reasoning: false,
     free: true,
   },
 }
@@ -300,8 +293,6 @@ export function modelFromApi(m, existing = {}) {
       output: Math.max(256, Math.min(output, 16384)),
     },
     modalities: { input: vision ? ["text", "image"] : ["text"], output: ["text"] },
-    tool_call: false,
-    reasoning: false,
     free: true,
   }
 }

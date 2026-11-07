@@ -117,6 +117,14 @@ await check("语音模型被正确识别（不进入模型选择器）", () => {
   assert.equal(isSpeechModel(DEFAULT_MODEL), false)
 })
 
+await check("模型表不带 tool_call:false（否则会被 magpie 从 agent 组过滤掉）", () => {
+  for (const model of Object.values(STATIC_MODELS)) {
+    assert.notEqual(model.tool_call, false)
+    assert.equal(model.free, true)
+    assert.ok(model.limit.context > 0)
+  }
+})
+
 console.log("\n2/2  钩子与真实接口（需要联网）")
 
 const input = { magpie: { options: {} }, directory: process.cwd() }
@@ -130,22 +138,33 @@ await check("config 钩子声明供应商与静态模型", async () => {
   assert.equal(Object.keys(cfg.provider[PROVIDER].models).length, Object.keys(STATIC_MODELS).length)
 })
 
+await check("默认不注册联网钩子（provider.models / auth.usage）", () => {
+  assert.equal(hooks.provider, undefined)
+  assert.equal(hooks.auth.usage, undefined)
+})
+
 const auth = { type: "api", key: "index", metadata: { endpoint: "public" } }
 const getAuth = async () => auth
 
-await check("provider.models 拉取官方模型表并过滤语音模型", async () => {
-  const models = await hooks.provider.models(cfg.provider[PROVIDER], { auth })
+await check("loader 未登录也能用", async () => {
+  const bare = await hooks.auth.loader(async () => undefined)
+  assert.equal(bare.baseURL, DEFAULT_BASE)
+  assert.ok(bare.apiKey)
+  assert.equal(typeof bare.fetch, "function")
+})
+
+await check("dynamicModels=true 时才注册动态模型与 usage 钩子", async () => {
+  const dynamic = await IndexTranslateAuth(input, { dynamicModels: true })
+  assert.equal(typeof dynamic.provider.models, "function")
+  assert.equal(typeof dynamic.auth.usage, "function")
+  const models = await dynamic.provider.models(cfg.provider[PROVIDER], { auth })
   const ids = Object.keys(models)
   assert.ok(ids.length >= 7, `只拿到 ${ids.length} 个模型`)
   assert.ok(ids.includes(DEFAULT_MODEL))
   assert.ok(!ids.some(isSpeechModel))
   assert.equal(models[DEFAULT_MODEL].free, true)
-  assert.equal(models[DEFAULT_MODEL].tool_call, false)
-  assert.ok(models[DEFAULT_MODEL].limit.context > 0)
-})
-
-await check("auth.usage 健康检查", async () => {
-  const usage = await hooks.auth.usage(getAuth)
+  assert.notEqual(models[DEFAULT_MODEL].tool_call, false)
+  const usage = await dynamic.auth.usage(getAuth)
   assert.ok(usage.plan)
   assert.ok(!usage.error, usage.error)
 })
