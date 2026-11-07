@@ -22,6 +22,9 @@ export const DEFAULTS = Object.freeze({
   // 兜底清理 <think>…</think>（服务端已通过 chat_template_kwargs 强制关闭思考）。
   stripThinking: true,
   timeoutMs: 120000,
+  // 流式请求带 stream_options.include_usage，让响应末尾回传真实 token 数。
+  // magpie 靠它统计输入/输出 token；自建服务不认这个字段时设为 false。
+  includeUsage: true,
   // 默认关闭：开启后才注册 provider.models / auth.usage 这两个联网钩子。
   // magpie 对模型列表钩子有 20s 超时，免费公共 API 偶尔慢，静态表更稳。
   dynamicModels: false,
@@ -116,10 +119,12 @@ export function resolveEndpoint(auth, opts = {}) {
   return { baseURL, key, isCustom, isPublic: !isCustom }
 }
 
+// stream_options 不在删除列表里：流式响应必须靠它带回 usage，否则 magpie 的
+// 输入/输出 token 会一直是 0（见 normalizeRequest 里的强制注入）。
 const DROP_FIELDS = [
   "tools", "tool_choice", "parallel_tool_calls", "functions", "function_call",
   "response_format", "logprobs", "top_logprobs", "reasoning_effort", "thinking",
-  "service_tier", "stream_options", "n", "seed", "user", "metadata",
+  "service_tier", "n", "seed", "user", "metadata",
   "modalities", "prediction", "audio", "web_search_options", "safety_settings",
 ]
 
@@ -186,6 +191,20 @@ export function normalizeRequest(body, opts = {}) {
   }
   if (b.temperature == null && opts.temperature != null) {
     b.temperature = Number(opts.temperature)
+  }
+
+  // 关键：OpenAI 兼容接口的流式响应默认不返回 usage，magpie 因此把每次请求的
+  // 输入/输出 token 记成 0（用量面板一片空白）。官方服务端是 vLLM，
+  // 支持 stream_options.include_usage，会在最后一个 chunk 带上 prompt/completion_tokens。
+  // 自建服务万一不认这个字段，可把选项 includeUsage 设为 false 关掉。
+  if (b.stream === true && opts.includeUsage !== false) {
+    b.stream_options = {
+      ...(b.stream_options && typeof b.stream_options === "object" ? b.stream_options : {}),
+      include_usage: true,
+    }
+  } else if (b.stream_options && typeof b.stream_options === "object") {
+    // 非流式请求带 stream_options 没有意义，部分服务端会直接 400。
+    delete b.stream_options
   }
 
   // 翻译模型按「单轮 user 指令」训练。只保留最后一条 user 消息，

@@ -1,5 +1,5 @@
 /**
- * magpie-index-translate v1.1
+ * magpie-index-translate v1.2
  *
  * 把 B 站 Index-Translate 模型家族接成 magpie / OpenCode 的供应商插件。
  * 默认直连官方免费公共 API（OpenAI 兼容、无需 GPU、无需密钥），
@@ -20,6 +20,9 @@
  *     兼容性改由 fetch 删除 tools 字段来保证，模型仍然会出现在可选列表里。
  *  4) 保留 v1.0 的请求规范化：删 tools、夹 max_tokens、关 thinking、
  *     只留最后一条 user 消息、兜底清洗 <think>。
+ *  5) v1.2：流式请求强制带 stream_options.include_usage，让官方服务端在最后一个
+ *     chunk 回传 prompt/completion_tokens。否则 magpie 的用量面板永远是 0/0。
+ *     非流式请求会去掉该字段；自建服务不认时把选项 includeUsage 设为 false。
  *
  * 入口模块只导出一个函数：magpie 会把「导出的每个函数」都当作插件执行。
  */

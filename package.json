@@ -1,7 +1,7 @@
 {
   "name": "magpie-index-translate",
-  "version": "1.1.0",
-  "description": "Magpie / OpenCode provider plugin for the Bilibili Index-Translate free public API (static model table, no network hooks by default)",
+  "version": "1.2.0",
+  "description": "Magpie / OpenCode provider plugin for the Bilibili Index-Translate free public API (static model table, no network hooks by default, real token usage)",
   "type": "module",
   "main": "./index.mjs",
   "files": [
@@ -29,6 +29,7 @@
     "maxConcurrency": 2,
     "options": {
       "dynamicModels": false,
+      "includeUsage": true,
       "keepSystem": false,
       "maxTokens": 4096,
       "temperature": 0,

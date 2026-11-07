@@ -8,7 +8,29 @@
 
 ---
 
-## 0. v1.1：修复 magpie 里的 404 报错
+## 0. 版本修复记录
+
+### v1.2：修复用量面板里 token 一直是 0
+
+magpie 的用量记录（`usage.jsonl` 和用量面板）里，这个插件的 `in` / `out` 全是 `0`：
+
+```text
+"model":"Index-Translate-9B" ... "in":0,"out":0,"status":200
+```
+
+原因是 OpenAI 兼容接口的**流式响应默认不返回 usage**，而 v1.1 为了兼容把 `stream_options` 整段从请求里删掉了。agent 调用几乎都是流式，于是每次都拿不到 token 数。
+
+v1.2 改成：流式请求强制带 `stream_options.include_usage`，官方服务端（vLLM）会在最后一个 chunk 回传真实用量：
+
+```text
+data: {...,"choices":[],"usage":{"prompt_tokens":28,"total_tokens":38,"completion_tokens":10}}
+```
+
+magpie 随即记录为 `in=28 out=10`。非流式请求会去掉这个字段（部分服务端不认）。自建服务不支持时，把 `includeUsage` 设为 `false`。
+
+> 升级后只对新请求生效，历史记录不会补数字。改完插件源码记得在应用里把插件**关掉再打开**。
+
+### v1.1：修复 magpie 里的 404 报错
 
 如果 magpie 日志里出现过这两条：
 
@@ -167,6 +189,7 @@ magpie plugin options index-translate '{"maxTokens":8192,"keepSystem":true}'
 | `maxTokens` | `4096` | 请求输出上限。跑 Nailong 长文档可调到 `16384`，但别用到 35B 上（会超模型上限）。 |
 | `temperature` | `0` | agent 没指定时的默认值，官方推荐 greedy。Homura 建议 0.3，可在单次请求里覆盖。 |
 | `stripThinking` | `true` | 兜底清理非流式响应里的 `<think>…</think>`。 |
+| `includeUsage` | `true` | 流式请求带 `stream_options.include_usage`，magpie 才能记下输入/输出 token。自建服务不认这个字段时设为 `false`。 |
 | `timeoutMs` | `120000` | 单次请求超时（毫秒），长文档可适当调大。 |
 | `baseURL` | — | 临时覆盖服务地址，不改登录信息。 |
 
@@ -214,6 +237,7 @@ node selftest.mjs
 | 现象 | 原因 / 处理 |
 | --- | --- |
 | `404 provider switched off` | 旧的 `bili-translate` 插件被禁用，但默认模型仍指向它。把默认模型改成 `index-translate/Index-Translate-9B`。 |
+| 用量面板里输入/输出 token 一直是 0 | v1.1 把 `stream_options` 删掉了，流式响应不带 usage。升级到 v1.2；只对新请求生效，历史记录不会补。 |
 | `404 unknown model` + `group/auto-...` | v1.0 的 `tool_call: false` 让模型被 agent 组过滤。升级到 v1.1，并在应用里重新选一次模型。 |
 | `400 "auto" tool choice requires ...` | 说明请求绕过了插件的 fetch（例如直接用 curl 打官方接口时带了 tools）。走 magpie 供应商不会有问题。 |
 | `400 max_tokens cannot be greater than max_model_len` | 插件已夹到 4096。若你把 `maxTokens` 调大了，调回 `4096`；长文档只在 Nailong 模型上放大。 |

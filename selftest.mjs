@@ -92,6 +92,31 @@ await check("图片消息（content 数组）规范化后不被破坏", () => {
   assert.equal(out.messages[0].content[1].type, "image_url")
 })
 
+await check("流式请求强制带 stream_options.include_usage（否则 token 统计为 0）", () => {
+  const streamed = normalizeRequest({ stream: true, messages: [{ role: "user", content: "你好" }] })
+  assert.deepEqual(streamed.stream_options, { include_usage: true })
+  // 已有的 stream_options 保留其余字段，只覆盖 include_usage。
+  const merged = normalizeRequest({
+    stream: true,
+    stream_options: { include_obfuscation: false },
+    messages: [{ role: "user", content: "你好" }],
+  })
+  assert.equal(merged.stream_options.include_obfuscation, false)
+  assert.equal(merged.stream_options.include_usage, true)
+  // 非流式一律去掉，避免部分服务端 400。
+  const plain = normalizeRequest({
+    messages: [{ role: "user", content: "你好" }],
+    stream_options: { include_usage: true },
+  })
+  assert.equal(plain.stream_options, undefined)
+  // 可关闭（自建服务不认这个字段时）。
+  const off = normalizeRequest(
+    { stream: true, messages: [{ role: "user", content: "你好" }] },
+    { includeUsage: false },
+  )
+  assert.equal(off.stream_options, undefined)
+})
+
 await check("<think> 兜底清洗", () => {
   assert.equal(stripThink("<think>让我先想想</think>Hello, world."), "Hello, world.")
   assert.equal(stripThink("  <think>\n</think>  Hi.  "), "Hi.")
