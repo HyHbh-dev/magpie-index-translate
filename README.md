@@ -14,10 +14,10 @@
 
 ```sh
 # 方式 A：让 magpie 直接拉仓库（需要 gh CLI 登录）
-magpie plugin add github:OWNER/magpie-index-translate
+magpie plugin add github:HyHbh-dev/magpie-index-translate
 
 # 方式 B：先 clone 再按文件夹添加（最稳，不依赖 gh）
-git clone https://github.com/OWNER/magpie-index-translate.git
+git clone https://github.com/HyHbh-dev/magpie-index-translate.git
 magpie plugin add ./magpie-index-translate
 ```
 
