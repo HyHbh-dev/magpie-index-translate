@@ -6,6 +6,11 @@
 
 同一个包也是标准 OpenCode v1 供应商插件，在 OpenCode 里也能直接加载（magpie 自有钩子会被忽略）。
 
+```sh
+magpie plugin add github:HyHbh-dev/magpie-index-translate
+```
+
+
 ---
 
 ## 0. 版本修复记录
@@ -100,9 +105,15 @@ gateway: ... group/auto-index-translate-9b ... 404: unknown model
 
 ---
 
-## 1. 安装（私有仓库请走方式 A）
+## 1. 安装
 
-### 方式 A：先 clone，再按文件夹添加（私有仓库唯一可靠的方式）
+一行装好，之后 `magpie plugin update` 可自动升级：
+
+```sh
+magpie plugin add github:HyHbh-dev/magpie-index-translate
+```
+
+**想改源码 / 离线用**：clone 后按文件夹添加，效果完全相同：
 
 ```sh
 git clone https://github.com/HyHbh-dev/magpie-index-translate.git
@@ -110,35 +121,9 @@ cd magpie-index-translate
 magpie plugin add .
 ```
 
-私有仓库对 git 来说就是一个普通 HTTPS 仓库，凭据由 Git Credential Manager 提供——VS Code / Git 登录过 GitHub 的机器上已经有了，`clone` 不会弹窗。
-
 之后更新：`git pull` → 再执行一次 `magpie plugin add .`（重复 add 会触发重载）。
 
-### 方式 B：`github:` 一行装 —— 只对公开仓库有效
-
-```sh
-magpie plugin add github:HyHbh-dev/magpie-index-translate
-```
-
-**私有仓库用这条必然失败**，报错：
-
-```text
-bun add https://github.com/HyHbh-dev/magpie-index-translate: exit status 1: bun add v1.4.4
-error: GET https://api.github.com/repos/HyHbh-dev/magpie-index-translate/tarball/ - 404
-```
-
-原因在 bun，不在 token：magpie 实际执行的是 `bun add <URL>`，而 bun 对 GitHub 简写只走 **tarball API**，且不支持私有仓库鉴权（bun 维护者原话：「github: syntax is only supported for public repositories in Bun」）。magpie 设置里的 GitHub token 不会传给 bun 的这次抓取。
-
-实测记录（bun 1.4.4）：
-
-| 尝试 | 结果 |
-| --- | --- |
-| `github:HyHbh-dev/magpie-index-translate` | `tarball/ - 404` |
-| `git+https://github.com/HyHbh-dev/magpie-index-translate.git` | 同样 `tarball/ - 404`（`git+` 前缀不改变 bun 的解析方式） |
-| 同一 token 直接请求 `api.github.com/.../tarball/` | **200**，token 有效、scope `repo` |
-| 无 token 请求同一地址 | 404（GitHub 对私有仓库隐藏存在性） |
-
-所以想让方式 B 可用，只有把仓库改成 **public**：仓库里没有任何密钥或私人信息，公开无风险。公开后再执行方式 B 即可，`magpie plugin update` 也能自动升级。
+> 附注：`github:` 简写底层是 `bun add <URL>`，走 GitHub 的 tarball API，**不支持私有仓库鉴权**（bun 维护者原话：「github: syntax is only supported for public repositories in Bun」）。本仓库此前为 private 时用这条必然 `tarball/ - 404`，与 token 无关——magpie 设置里的 GitHub token 不会传给 bun 的这次抓取。现已公开，两条路都可用。
 
 ### 注意：只留一份
 
@@ -158,10 +143,10 @@ magpie plugin rm <之前那条的 spec>
 **Windows PowerShell**（把路径换成你实际存放本文件夹的位置）：
 
 ```powershell
-cd C:\Users\64177\WorkBuddy\2026-11-07-09-09-20\magpie-index-translate
+cd C:\path\to\magpie-index-translate
 
 # 1) 添加插件（文件夹就地加载，不安装任何依赖）
-magpie plugin add C:\Users\64177\WorkBuddy\2026-11-07-09-09-20\magpie-index-translate
+magpie plugin add C:\path\to\magpie-index-translate
 
 # 2) 验证
 magpie provider test index-translate
