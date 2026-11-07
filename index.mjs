@@ -1,5 +1,5 @@
 /**
- * magpie-index-translate v1.2
+ * magpie-index-translate v1.3
  *
  * 把 B 站 Index-Translate 模型家族接成 magpie / OpenCode 的供应商插件。
  * 默认直连官方免费公共 API（OpenAI 兼容、无需 GPU、无需密钥），
@@ -23,6 +23,9 @@
  *  5) v1.2：流式请求强制带 stream_options.include_usage，让官方服务端在最后一个
  *     chunk 回传 prompt/completion_tokens。否则 magpie 的用量面板永远是 0/0。
  *     非流式请求会去掉该字段；自建服务不认时把选项 includeUsage 设为 false。
+ *  6) v1.3：system 不再无脑丢弃。翻译扩展的「Translate into Simplified Chinese」
+ *     就写在 system 里，丢了模型会回一大段解释（表现为「翻译结果是一大串」）。
+ *     现在按内容判定：>800 字符丢；含翻译/语言关键词的短 system 保留为独立 system 消息。
  *
  * 入口模块只导出一个函数：magpie 会把「导出的每个函数」都当作插件执行。
  */

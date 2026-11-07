@@ -10,6 +10,25 @@
 
 ## 0. 版本修复记录
 
+### v1.3：修复「翻译结果是一大串」
+
+现象：翻译一句话，回来的却是一大段英文解释或闲聊，输出 500~700 tokens，耗时 10 秒以上。
+
+原因：浏览器翻译扩展把**翻译指令写在 system 里**（如 “Translate into Simplified Chinese”），而插件默认把 system 整段丢掉，模型收到一段裸文本，不知道要干什么，就自顾自解释起来。对照实验：
+
+| 请求 | 输出 | 内容 |
+| --- | --- | --- |
+| 只有 user | 85 tokens | `The sentence ... is a well-known example of a Pangram... could you clarify what it says?` |
+| 带 system 指令 | 16 tokens | `那只敏捷的棕色狐狸跳过那只懒惰的狗。` |
+
+v1.3 改成按内容判定，不再无脑丢弃：
+
+1. 超过 800 字符的 system 一律丢（agent 的角色设定，如 Claude Code）；
+2. `keepSystem: true` 时保留；
+3. 含翻译/语言关键词（translate、翻译、中文、日本語…）的短 system **自动保留**，并以独立的 `system` 消息发送。
+
+实测同一条请求：输出从 580 tokens 降到 16 tokens，耗时从 11 秒降到 1 秒内。
+
 ### v1.2：修复用量面板里 token 一直是 0
 
 magpie 的用量记录（`usage.jsonl` 和用量面板）里，这个插件的 `in` / `out` 全是 `0`：
@@ -185,7 +204,7 @@ magpie plugin options index-translate '{"maxTokens":8192,"keepSystem":true}'
 | 选项 | 默认 | 说明 |
 | --- | --- | --- |
 | `dynamicModels` | `false` | 是否注册 `provider.models` / `auth.usage` 两个联网钩子，动态刷新官方模型列表。默认关闭更稳。 |
-| `keepSystem` | `false` | 是否把较短（≤800 字符）的 system 指令并入用户消息。默认丢弃，避免 agent 的角色设定污染译文。 |
+| `keepSystem` | `false` | 强制保留所有 ≤800 字符的 system。含翻译/语言关键词的指令本来就会自动保留，通常不用开这个开关。 |
 | `maxTokens` | `4096` | 请求输出上限。跑 Nailong 长文档可调到 `16384`，但别用到 35B 上（会超模型上限）。 |
 | `temperature` | `0` | agent 没指定时的默认值，官方推荐 greedy。Homura 建议 0.3，可在单次请求里覆盖。 |
 | `stripThinking` | `true` | 兜底清理非流式响应里的 `<think>…</think>`。 |

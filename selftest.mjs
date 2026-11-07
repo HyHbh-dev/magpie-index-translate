@@ -117,6 +117,38 @@ await check("流式请求强制带 stream_options.include_usage（否则 token �
   assert.equal(off.stream_options, undefined)
 })
 
+await check("翻译指令写在 system 里时自动保留（否则模型会回一大段解释）", () => {
+  const withDirective = normalizeRequest({
+    messages: [
+      { role: "system", content: "You are a translation engine. Translate into Simplified Chinese." },
+      { role: "user", content: "Hello, world." },
+    ],
+  })
+  assert.equal(withDirective.messages.length, 2)
+  assert.equal(withDirective.messages[0].role, "system")
+  assert.match(withDirective.messages[0].content, /Translate into Simplified Chinese/)
+  assert.equal(withDirective.messages[1].content, "Hello, world.")
+
+  // 中文指令同样能识别。
+  const zh = normalizeRequest({
+    messages: [
+      { role: "system", content: "请把下面的内容翻译成简体中文，只输出译文。" },
+      { role: "user", content: "Good morning." },
+    ],
+  })
+  assert.equal(zh.messages[0].role, "system")
+
+  // 泛泛的 agent 角色设定仍然丢弃，避免污染译文。
+  const agent = normalizeRequest({
+    messages: [
+      { role: "system", content: "You are Claude Code. Always use tools and be concise." },
+      { role: "user", content: "Good morning." },
+    ],
+  })
+  assert.equal(agent.messages.length, 1)
+  assert.equal(agent.messages[0].role, "user")
+})
+
 await check("<think> 兜底清洗", () => {
   assert.equal(stripThink("<think>让我先想想</think>Hello, world."), "Hello, world.")
   assert.equal(stripThink("  <think>\n</think>  Hi.  "), "Hi.")

@@ -13,8 +13,9 @@ export const DEFAULT_MODEL = "Index-Translate-35B-A3B"
 
 /** 插件选项的默认值，可被 plugins.json 的 options 或 magpie.option 覆盖。 */
 export const DEFAULTS = Object.freeze({
-  // Index-Translate 是翻译专用模型：agent 自带的超长 system prompt 会污染译文，
-  // 默认只保留最后一条 user 消息。设为 true 可把较短的 system 指令一起带上。
+  // agent 自带的超长 system prompt 会污染译文，超过 800 字符一律丢弃。
+  // 含翻译/语言关键词的短 system 会自动保留（浏览器翻译扩展的指令就在这里），
+  // 不需要开这个开关；设为 true 则强制保留所有 ≤800 字符的 system。
   keepSystem: false,
   // 官方公共 API 对 max_tokens 有硬上限，超出直接 400。统一夹到这个值。
   maxTokens: 4096,
@@ -139,19 +140,31 @@ function textOf(content) {
   return ""
 }
 
-function attachSystem(content, system, keepSystem) {
-  if (!keepSystem || !system || system.length > 800) return content
-  if (typeof content === "string") return `${system}\n\n${content}`
-  if (Array.isArray(content)) {
-    const first = content.find((p) => p && (p.type === "text" || p.type === "input_text"))
-    if (first) {
-      return content.map((p) =>
-        p === first ? { ...p, text: `${system}\n\n${p.text || ""}` } : p,
-      )
-    }
-    return [{ type: "text", text: system }, ...content]
-  }
-  return content
+/**
+ * 翻译指令通常写在 system 里（"Translate into Simplified Chinese"），
+ * 丢掉它模型就不知道要干什么，会回一大段解释/闲聊——用户看到的就是「翻译是一大串」。
+ * 但 agent（Claude Code 等）的 system 是几千字符的角色设定，留下来会污染译文。
+ *
+ * 判定规则：
+ *  1) 超过 800 字符一律丢弃（agent 的角色设定）；
+ *  2) keepSystem=true 时保留；
+ *  3) 含翻译/语言关键词时自动保留（浏览器翻译扩展的 system 就是这种）。
+ */
+const TRANSLATE_HINT =
+  /translat|locali[sz]e|翻译|翻譯|译成|譯成|language|语言|語言|中文|英文|英语|英語|汉语|漢語|简体|簡體|繁体|繁體|日文|日语|日語|韩文|韩语|韓語|法文|法语|法语|德文|德语|西班牙|俄语|日本語|한국어|español|français|deutsch|русск|português|italiano/i
+
+export function pickSystem(messages, keepSystem = false) {
+  const system = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && (m.role === "system" || m.role === "developer"))
+    .map((m) => textOf(m.content))
+    .filter(Boolean)
+    .join("\n")
+    .trim()
+
+  if (!system) return ""
+  if (system.length > 800) return ""
+  if (keepSystem || TRANSLATE_HINT.test(system)) return system
+  return ""
 }
 
 /**
@@ -207,20 +220,21 @@ export function normalizeRequest(body, opts = {}) {
     delete b.stream_options
   }
 
-  // 翻译模型按「单轮 user 指令」训练。只保留最后一条 user 消息，
-  // 默认丢掉 agent 的 system prompt（Claude Code 之类会带几千 token 的角色设定）。
+  // 翻译模型按「单轮 user 指令」训练，只保留最后一条 user 消息。
+  // system 走 pickSystem 判定：翻译指令保留（否则模型不知道目标语言，会回一大段解释），
+  // agent 的超长角色设定丢弃。
   if (Array.isArray(b.messages) && b.messages.length > 0) {
     const lastUser = [...b.messages].reverse().find((m) => m && m.role === "user")
     if (lastUser) {
-      const system = b.messages
-        .filter((m) => m && (m.role === "system" || m.role === "developer"))
-        .map((m) => textOf(m.content))
-        .filter(Boolean)
-        .join("\n")
-        .trim()
-      b.messages = [
-        { role: "user", content: attachSystem(lastUser.content, system, !!opts.keepSystem) },
-      ]
+      const system = pickSystem(b.messages, !!opts.keepSystem)
+      // 保留为独立的 system 消息：官方模型对 system 角色的支持比「拼进 user」更好，
+      // 实测同一条翻译指令放进 system 时输出 16 tokens 干净译文，拼进 user 容易带上寒暄。
+      b.messages = system
+        ? [
+            { role: "system", content: system },
+            { role: "user", content: lastUser.content },
+          ]
+        : [{ role: "user", content: lastUser.content }]
     }
   }
 
