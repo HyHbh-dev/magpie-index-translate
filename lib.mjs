@@ -13,9 +13,8 @@ export const DEFAULT_MODEL = "Index-Translate-35B-A3B"
 
 /** 插件选项的默认值，可被 plugins.json 的 options 或 magpie.option 覆盖。 */
 export const DEFAULTS = Object.freeze({
-  // agent 自带的超长 system prompt 会污染译文，超过 800 字符一律丢弃。
-  // 含翻译/语言关键词的短 system 会自动保留（浏览器翻译扩展的指令就在这里），
-  // 不需要开这个开关；设为 true 则强制保留所有 ≤800 字符的 system。
+  // 含翻译/语言关键词的 system 不限长度自动保留（SnowShot 的指令有 1800+ 字符），
+  // 不需要开这个开关；设为 true 则连不含关键词的中等长度 system 也保留。
   keepSystem: false,
   // 官方公共 API 对 max_tokens 有硬上限，超出直接 400。统一夹到这个值。
   maxTokens: 4096,
@@ -29,6 +28,9 @@ export const DEFAULTS = Object.freeze({
   // 默认关闭：开启后才注册 provider.models / auth.usage 这两个联网钩子。
   // magpie 对模型列表钩子有 20s 超时，免费公共 API 偶尔慢，静态表更稳。
   dynamicModels: false,
+  // 排错用：填一个文件路径，就会把每个进来的原始请求体按行追加进去（JSONL）。
+  // 用来确认调用方到底发了什么 messages，默认关闭。
+  capturePath: "",
 })
 
 /**
@@ -145,13 +147,18 @@ function textOf(content) {
  * 丢掉它模型就不知道要干什么，会回一大段解释/闲聊——用户看到的就是「翻译是一大串」。
  * 但 agent（Claude Code 等）的 system 是几千字符的角色设定，留下来会污染译文。
  *
- * 判定规则：
- *  1) 超过 800 字符一律丢弃（agent 的角色设定）；
- *  2) keepSystem=true 时保留；
- *  3) 含翻译/语言关键词时自动保留（浏览器翻译扩展的 system 就是这种）。
+ * 判定规则（按顺序）：
+ *  1) 超过 8000 字符一律丢弃（只可能是 agent 的角色设定）；
+ *  2) 含翻译/语言关键词时保留，**不受长度限制**——SnowShot 等截图翻译工具给的
+ *     translationSystemPrompt 有 1800+ 字符，按长度丢弃就等于把指令扔了；
+ *  3) keepSystem=true 时保留中等长度的 system；
+ *  4) 其余（例如 "You are Claude Code"）一律丢弃，避免污染译文。
  */
 const TRANSLATE_HINT =
-  /translat|locali[sz]e|翻译|翻譯|译成|譯成|language|语言|語言|中文|英文|英语|英語|汉语|漢語|简体|簡體|繁体|繁體|日文|日语|日語|韩文|韩语|韓語|法文|法语|法语|德文|德语|西班牙|俄语|日本語|한국어|español|français|deutsch|русск|português|italiano/i
+  /translat|locali[sz]e|翻译|翻譯|译成|譯成|译文|譯文|language|语言|語言|中文|英文|英语|英語|汉语|漢語|简体|簡體|繁体|繁體|日文|日语|日語|韩文|韩语|韓語|法文|法语|法语|德文|德语|西班牙|俄语|日本語|한국어|español|français|deutsch|русск|português|italiano/i
+
+/** 再长的 system 只可能是 agent 的角色设定/工具说明，翻译时带上纯属干扰。 */
+const MAX_SYSTEM = 8000
 
 export function pickSystem(messages, keepSystem = false) {
   const system = (Array.isArray(messages) ? messages : [])
@@ -162,8 +169,9 @@ export function pickSystem(messages, keepSystem = false) {
     .trim()
 
   if (!system) return ""
-  if (system.length > 800) return ""
-  if (keepSystem || TRANSLATE_HINT.test(system)) return system
+  if (system.length > MAX_SYSTEM) return ""
+  if (TRANSLATE_HINT.test(system)) return system
+  if (keepSystem) return system
   return ""
 }
 

@@ -70,16 +70,38 @@ await check("请求规范化：删除 tools、夹住 max_tokens、关闭 thinkin
   assert.match(out.messages[0].content, /你好/)
 })
 
-await check("keepSystem=true 时保留短 system 指令，超长 system 仍丢弃", () => {
-  const base = {
-    messages: [
-      { role: "system", content: "只输出译文" },
-      { role: "user", content: "你好" },
-    ],
+await check("system 判定：翻译指令不受长度限制，agent 角色设定仍丢弃", () => {
+  // 短指令：透传
+  const short = { messages: [{ role: "system", content: "只输出译文" }, { role: "user", content: "你好" }] }
+  assert.match(normalizeRequest(short, {}).messages[0].content, /只输出译文/)
+
+  // SnowShot 截图翻译的 system 有 1800+ 字符，必须整段保留。
+  const snowshot =
+    "You are the translation engine for Snow Shot's screenshot text editor.\n".repeat(24) +
+    "Return only the translated text."
+  assert.ok(snowshot.length > 1500, `样例只有 ${snowshot.length} 字符`)
+  const kept = normalizeRequest(
+    { messages: [{ role: "system", content: snowshot }, { role: "user", content: "hello" }] },
+    {},
+  )
+  assert.equal(kept.messages.length, 2)
+  assert.equal(kept.messages[0].role, "system")
+  assert.ok(kept.messages[0].content.includes("translation engine"))
+
+  // 超长 agent 角色设定（>8000）无论 keepSystem 与否都丢弃。
+  const huge = {
+    messages: [{ role: "system", content: "x".repeat(9000) }, { role: "user", content: "你好" }],
   }
-  assert.match(normalizeRequest(base, { keepSystem: true }).messages[0].content, /只输出译文/)
-  const long = { messages: [{ role: "system", content: "x".repeat(2000) }, { role: "user", content: "你好" }] }
-  assert.equal(normalizeRequest(long, { keepSystem: true }).messages[0].content, "你好")
+  const dropped = normalizeRequest(huge, { keepSystem: true })
+  assert.equal(dropped.messages.length, 1)
+  assert.equal(dropped.messages[0].role, "user")
+
+  // 中等长度、无关键词：默认丢弃，keepSystem=true 才保留。
+  const mid = {
+    messages: [{ role: "system", content: "y".repeat(2000) }, { role: "user", content: "你好" }],
+  }
+  assert.equal(normalizeRequest(mid, {}).messages.length, 1)
+  assert.equal(normalizeRequest(mid, { keepSystem: true }).messages.length, 2)
 })
 
 await check("图片消息（content 数组）规范化后不被破坏", () => {

@@ -10,6 +10,30 @@
 
 ## 0. 版本修复记录
 
+### v1.4：修复 SnowShot 截图翻译「把报错翻译成一份解决方案」
+
+现象：用 SnowShot 截图翻译一段英文报错，返回的却是一份中文「故障排查指南」（`### Steps to Fix: 1. **Use the Correct Passphrase** …`），700 tokens 起步。
+
+原因：SnowShot 的翻译请求是 `system` 放 **1855 字符**的 `translationSystemPrompt`、`user` 只放 OCR 出来的原文。而 v1.3 有「system 超过 800 字符一律丢弃」的规则（本意是挡 Claude Code 那种几千字的角色设定），恰好把这段指令整段扔掉，模型只看到一句裸报错，于是开始「解答问题」。
+
+对照实验（同一句报错、同一模型）：
+
+| 请求 | 输出 |
+| --- | --- |
+| 丢掉 system（v1.3 行为） | 475 tokens，`The error message indicates… ### Steps to Fix: 1. **Use the Correct Passphrase**` |
+| 保留 SnowShot 原始 system | **27 tokens**，`密码短语无法打开服务器上的文件：该文件是用另一个密码短语加密的；请使用您其他计算机上设置的密码短语。` |
+
+v1.4 改成按内容判定，长度只做兜底上限：
+
+1. 含翻译/语言关键词（`translat`、`翻译`、`译文`、`language`、`中文`…）→ **不论多长都保留**；
+2. 超过 8000 字符 → 仍丢弃（只可能是 agent 的角色设定）；
+3. 800 字符以内的短 system → 直接透传（少干预）；
+4. `keepSystem: true` → 中等长度的一并保留。
+
+v1.3 的第 1 条（800 字符一刀切）自 v1.4 起失效。
+
+新增调试选项 `capturePath`（默认空，即关闭）：填一个本机 `.jsonl` 路径，插件会把每次请求的**原始 body 与规范化后的 body** 追加写入，用于排查「某个客户端发来的请求长什么样」。它记录的是真实译文内容，排查完请及时清空该选项，不要长期开着。
+
 ### v1.3：修复「翻译结果是一大串」
 
 现象：翻译一句话，回来的却是一大段英文解释或闲聊，输出 500~700 tokens，耗时 10 秒以上。
@@ -211,6 +235,7 @@ magpie plugin options index-translate '{"maxTokens":8192,"keepSystem":true}'
 | `includeUsage` | `true` | 流式请求带 `stream_options.include_usage`，magpie 才能记下输入/输出 token。自建服务不认这个字段时设为 `false`。 |
 | `timeoutMs` | `120000` | 单次请求超时（毫秒），长文档可适当调大。 |
 | `baseURL` | — | 临时覆盖服务地址，不改登录信息。 |
+| `capturePath` | 空（关闭） | 排障用：填本机 `.jsonl` 路径，把每次请求的原始 body 和规范化后的 body 追加写入。**记录真实译文内容，查完请清掉。** |
 
 清掉选项：`magpie plugin options index-translate off`。
 

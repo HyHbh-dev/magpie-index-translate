@@ -1,5 +1,5 @@
 /**
- * magpie-index-translate v1.3
+ * magpie-index-translate v1.4
  *
  * 把 B 站 Index-Translate 模型家族接成 magpie / OpenCode 的供应商插件。
  * 默认直连官方免费公共 API（OpenAI 兼容、无需 GPU、无需密钥），
@@ -26,6 +26,10 @@
  *  6) v1.3：system 不再无脑丢弃。翻译扩展的「Translate into Simplified Chinese」
  *     就写在 system 里，丢了模型会回一大段解释（表现为「翻译结果是一大串」）。
  *     现在按内容判定：>800 字符丢；含翻译/语言关键词的短 system 保留为独立 system 消息。
+ *  7) v1.4：v1.3 的「>800 字符丢」也会误伤——SnowShot 的 translationSystemPrompt
+ *     有 1855 字符，被丢掉后就变成「把报错翻译成一份解决方案」。
+ *     现在含翻译/语言关键词的 system 不论多长都保留，8000 字符才是硬上限。
+ *     另加 capturePath 选项（默认关）：把原始/规范化后的请求体写入 jsonl，用于排障。
  *
  * 入口模块只导出一个函数：magpie 会把「导出的每个函数」都当作插件执行。
  */
@@ -140,13 +144,37 @@ export const IndexTranslateAuth = async (input = {}, options = {}) => {
 
             let body = init.body
             let streaming = false
+            let raw = null
+            let normalized = null
             if (typeof body === "string" && body.trim().startsWith("{")) {
               try {
                 const parsed = JSON.parse(body)
+                raw = parsed
                 streaming = Boolean(parsed.stream)
-                body = JSON.stringify(normalizeRequest(parsed, opts))
+                normalized = normalizeRequest(parsed, opts)
+                body = JSON.stringify(normalized)
               } catch {
                 // 不是 JSON（例如二进制），原样透传。
+              }
+            }
+
+            // 排错开关：把调用方原始请求与规范化后的请求写入 JSONL，事后可对比
+            // 「指令到底丢在哪一步」。默认关闭，写失败不影响请求。
+            if (opts.capturePath && raw) {
+              try {
+                const { appendFile } = await import("node:fs/promises")
+                await appendFile(
+                  opts.capturePath,
+                  JSON.stringify({
+                    at: new Date().toISOString(),
+                    url: String(url),
+                    raw,
+                    normalized,
+                  }) + "\n",
+                  "utf8",
+                )
+              } catch {
+                // 忽略：没有写权限时不应该让翻译失败。
               }
             }
 

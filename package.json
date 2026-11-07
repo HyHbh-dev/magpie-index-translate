@@ -1,6 +1,6 @@
 {
   "name": "magpie-index-translate",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Magpie / OpenCode provider plugin for the Bilibili Index-Translate free public API (static model table, no network hooks by default, real token usage)",
   "type": "module",
   "main": "./index.mjs",
