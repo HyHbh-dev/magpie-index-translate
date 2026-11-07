@@ -102,18 +102,47 @@ gateway: ... group/auto-index-translate-9b ... 404: unknown model
 
 ## 1. 从私有 GitHub 仓库安装
 
-本仓库是 **private**。先在本机完成 GitHub 登录（`gh auth login`，或 VS Code / Git Credential Manager 登录），然后任选一种：
+### 方式 A：先 clone，再按文件夹添加（推荐，最稳）
+
+私有仓库对 git 来说就是一个普通 HTTPS 仓库，凭据由 Git Credential Manager 提供——VS Code / Git 登录过 GitHub 的机器上已经有了：
 
 ```sh
-# 方式 A：让 magpie 直接拉仓库（需要 gh CLI 登录）
-magpie plugin add github:HyHbh-dev/magpie-index-translate
-
-# 方式 B：先 clone 再按文件夹添加（最稳，不依赖 gh）
 git clone https://github.com/HyHbh-dev/magpie-index-translate.git
-magpie plugin add ./magpie-index-translate
+cd magpie-index-translate
+magpie plugin add .
 ```
 
-若拉取时报 401 / 403，说明本机命令行没有 GitHub 凭据，补一次登录即可。
+之后更新：`git pull` → 再执行一次 `magpie plugin add .`（重复 add 会触发重载）。
+
+### 方式 B：让 magpie 自己拉仓库（需要 magpie 里有 GitHub token）
+
+```sh
+magpie plugin add github:HyHbh-dev/magpie-index-translate
+```
+
+私有仓库 magpie 必须带 token 才能读。token 有两个来源，**设置里的优先**：
+
+- magpie → **设置 → 网络与共享 → GitHub token**（存在本机）
+- 环境变量 `GITHUB_TOKEN` 或 `GH_TOKEN`
+
+token 要能读这个仓库：fine-grained token 勾 `Contents: Read`，经典 token 勾 `repo`。
+**不需要 gh CLI**，magpie 不调用它。
+
+没配 token 时 magpie 的报错原文是：
+
+```text
+GitHub has no <owner>/<repo> (a private repository installs with a GitHub token
+that can read it, set in Settings › Network and sharing)
+```
+
+### 注意：只留一份
+
+两种方式的安装目录不同，同时装会出现两个条目、同一个 provider id（`index-translate`）冲突。切换前先删掉旧的：
+
+```sh
+magpie plugin                                   # 看现有条目和状态
+magpie plugin rm <之前那条的 spec>
+```
 
 ---
 
