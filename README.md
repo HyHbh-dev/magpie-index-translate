@@ -100,11 +100,9 @@ gateway: ... group/auto-index-translate-9b ... 404: unknown model
 
 ---
 
-## 1. 从私有 GitHub 仓库安装
+## 1. 安装（私有仓库请走方式 A）
 
-### 方式 A：先 clone，再按文件夹添加（推荐，最稳）
-
-私有仓库对 git 来说就是一个普通 HTTPS 仓库，凭据由 Git Credential Manager 提供——VS Code / Git 登录过 GitHub 的机器上已经有了：
+### 方式 A：先 clone，再按文件夹添加（私有仓库唯一可靠的方式）
 
 ```sh
 git clone https://github.com/HyHbh-dev/magpie-index-translate.git
@@ -112,28 +110,35 @@ cd magpie-index-translate
 magpie plugin add .
 ```
 
+私有仓库对 git 来说就是一个普通 HTTPS 仓库，凭据由 Git Credential Manager 提供——VS Code / Git 登录过 GitHub 的机器上已经有了，`clone` 不会弹窗。
+
 之后更新：`git pull` → 再执行一次 `magpie plugin add .`（重复 add 会触发重载）。
 
-### 方式 B：让 magpie 自己拉仓库（需要 magpie 里有 GitHub token）
+### 方式 B：`github:` 一行装 —— 只对公开仓库有效
 
 ```sh
 magpie plugin add github:HyHbh-dev/magpie-index-translate
 ```
 
-私有仓库 magpie 必须带 token 才能读。token 有两个来源，**设置里的优先**：
-
-- magpie → **设置 → 网络与共享 → GitHub token**（存在本机）
-- 环境变量 `GITHUB_TOKEN` 或 `GH_TOKEN`
-
-token 要能读这个仓库：fine-grained token 勾 `Contents: Read`，经典 token 勾 `repo`。
-**不需要 gh CLI**，magpie 不调用它。
-
-没配 token 时 magpie 的报错原文是：
+**私有仓库用这条必然失败**，报错：
 
 ```text
-GitHub has no <owner>/<repo> (a private repository installs with a GitHub token
-that can read it, set in Settings › Network and sharing)
+bun add https://github.com/HyHbh-dev/magpie-index-translate: exit status 1: bun add v1.4.4
+error: GET https://api.github.com/repos/HyHbh-dev/magpie-index-translate/tarball/ - 404
 ```
+
+原因在 bun，不在 token：magpie 实际执行的是 `bun add <URL>`，而 bun 对 GitHub 简写只走 **tarball API**，且不支持私有仓库鉴权（bun 维护者原话：「github: syntax is only supported for public repositories in Bun」）。magpie 设置里的 GitHub token 不会传给 bun 的这次抓取。
+
+实测记录（bun 1.4.4）：
+
+| 尝试 | 结果 |
+| --- | --- |
+| `github:HyHbh-dev/magpie-index-translate` | `tarball/ - 404` |
+| `git+https://github.com/HyHbh-dev/magpie-index-translate.git` | 同样 `tarball/ - 404`（`git+` 前缀不改变 bun 的解析方式） |
+| 同一 token 直接请求 `api.github.com/.../tarball/` | **200**，token 有效、scope `repo` |
+| 无 token 请求同一地址 | 404（GitHub 对私有仓库隐藏存在性） |
+
+所以想让方式 B 可用，只有把仓库改成 **public**：仓库里没有任何密钥或私人信息，公开无风险。公开后再执行方式 B 即可，`magpie plugin update` 也能自动升级。
 
 ### 注意：只留一份
 
